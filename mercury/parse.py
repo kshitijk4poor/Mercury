@@ -6,12 +6,18 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from mercury.schemas import InboundEventModel, PlannerActionModel, WorkflowInputModel
+from mercury.schemas import (
+    InboundEventModel,
+    PlannerActionModel,
+    SchedulerDecisionModel,
+    WorkflowInputModel,
+)
 from mercury.types import (
     InboundEvent,
     ParseError,
     PlannerAction,
     PlannerActionType,
+    SchedulerDecision,
     TaskKind,
     TaskSpec,
     WorkflowSpec,
@@ -95,12 +101,20 @@ def parse_planner_action(raw: dict[str, Any]) -> PlannerAction:
     except ValidationError as exc:
         raise _to_parse_error(exc) from exc
 
-    tasks = tuple(_task_from_model(task) for task in model.tasks)
     return PlannerAction(
         action=PlannerActionType(model.action),
-        tasks=tasks,
+        task_ids=tuple(model.task_ids),
         final_artifact_id=model.final_artifact_id,
     )
+
+
+def parse_scheduler_decision(raw: dict[str, Any]) -> SchedulerDecision:
+    try:
+        model = SchedulerDecisionModel.model_validate(raw)
+    except ValidationError as exc:
+        raise _to_parse_error(exc) from exc
+
+    return SchedulerDecision(task_ids=tuple(model.task_ids), state=model.state)
 
 
 def parse_inbound_event(raw: dict[str, Any]) -> InboundEvent:
