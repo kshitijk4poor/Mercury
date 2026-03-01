@@ -1,0 +1,28 @@
+[project]
+name = "mercury"
+version = "0.1.0"
+description = "Minimal multi-agent orchestrator with parse-first boundaries."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "pydantic>=2.7.0",
+  "pydantic-ai>=0.0.33",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-cov>=5.0.0",
+]
+
+[project.scripts]
+mercury = "mercury.cli:entrypoint"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
