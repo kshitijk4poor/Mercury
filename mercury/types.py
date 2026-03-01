@@ -1,4 +1,4 @@
-"""Core internal types."""
+"""Core domain types and extension contracts for Mercury v2."""
 
 from __future__ import annotations
 
@@ -20,6 +20,10 @@ class PlannerContractError(RuntimeError):
     """Raised when planner emits actions violating runtime contracts."""
 
 
+class SchedulerContractError(RuntimeError):
+    """Raised when scheduler emits invalid decisions."""
+
+
 class TaskKind(str, Enum):
     AGENT = "agent"
     TOOL = "tool"
@@ -33,6 +37,13 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     BLOCKED = "blocked"
+    PAUSED = "paused"
+
+
+class DurabilityMode(str, Enum):
+    SYNC = "sync"
+    ASYNC = "async"
+    EXIT = "exit"
 
 
 class PlannerActionType(str, Enum):
@@ -62,8 +73,14 @@ class WorkflowSpec:
 @dataclass(frozen=True)
 class PlannerAction:
     action: PlannerActionType
-    tasks: tuple[TaskSpec, ...] = ()
+    task_ids: tuple[str, ...] = ()
     final_artifact_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SchedulerDecision:
+    task_ids: tuple[str, ...]
+    state: Any = None
 
 
 @dataclass(frozen=True)
@@ -75,11 +92,20 @@ class InboundEvent:
     timestamp: str
 
 
+@dataclass(frozen=True)
+class LifecycleEvent:
+    event_type: str
+    payload: dict[str, Any]
+    timestamp: str
+    tick: int
+
+
 @dataclass
 class EventRecord:
     event_type: str
     payload: dict[str, Any]
     timestamp: str
+    tick: int | None = None
 
 
 @dataclass
@@ -114,7 +140,7 @@ class RunResult:
     checkpoint_path: str | None
 
 
-@dataclass
+@dataclass(frozen=True)
 class AgentContext:
     run_id: str
     task_id: str
@@ -122,7 +148,7 @@ class AgentContext:
     input: Mapping[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ToolContext:
     run_id: str
     task_id: str
@@ -130,7 +156,7 @@ class ToolContext:
     input: Mapping[str, Any]
 
 
-@dataclass
+@dataclass(frozen=True)
 class SkillContext:
     run_id: str
     task_id: str
@@ -153,6 +179,24 @@ class SkillResult:
     output: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class HitlDecision:
+    pause: bool
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PlannerStateView:
+    run_id: str
+    workflow_id: str
+    tick: int
+    final_artifact_id: str | None
+    task_specs: dict[str, TaskSpec]
+    task_statuses: dict[str, TaskStatus]
+    task_order: tuple[str, ...]
+    pending_approval: dict[str, Any] | None
+
+
 class AgentCallable(Protocol):
     async def __call__(self, ctx: AgentContext) -> AgentResult | dict[str, Any]: ...
 
@@ -167,5 +211,65 @@ class SkillCallable(Protocol):
     async def __call__(self, ctx: SkillContext) -> SkillResult | dict[str, Any]: ...
 
 
+class PlannerPlugin(Protocol):
+    def parse_config(self, raw: Mapping[str, Any] | None) -> Any: ...
+
+    async def plan(
+        self, state_view: PlannerStateView, config: Any
+    ) -> PlannerAction | dict[str, Any]: ...
+
+
+class SchedulerPlugin(Protocol):
+    def parse_config(self, raw: Mapping[str, Any] | None) -> Any: ...
+
+    def init_state(self, config: Any) -> Any: ...
+
+    def parse_state(self, raw: Any) -> Any: ...
+
+    async def pick(
+        self,
+        ready_task_ids: tuple[str, ...],
+        state_view: PlannerStateView,
+        scheduler_state: Any,
+        config: Any,
+    ) -> SchedulerDecision | dict[str, Any]: ...
+
+
+class SandboxPlugin(Protocol):
+    def parse_config(self, raw: Mapping[str, Any] | None) -> Any: ...
+
+    async def execute(
+        self,
+        *,
+        kind: TaskKind,
+        target: str,
+        handler: Any,
+        task_input: dict[str, Any],
+        ctx: AgentContext | ToolContext | SkillContext,
+        config: Any,
+    ) -> dict[str, Any]: ...
+
+
+class HitlPlugin(Protocol):
+    def parse_config(self, raw: Mapping[str, Any] | None) -> Any: ...
+
+    def subscribed_events(self, config: Any) -> frozenset[str] | None: ...
+
+    async def maybe_pause(
+        self,
+        event: LifecycleEvent,
+        state_view: PlannerStateView,
+        config: Any,
+    ) -> HitlDecision | dict[str, Any]: ...
+
+
+class HookCallable(Protocol):
+    async def __call__(self, event: LifecycleEvent) -> Any: ...
+
+
 class InboundAdapter(Protocol):
     def __aiter__(self): ...
+
+
+class InboundAdapterFactory(Protocol):
+    def __call__(self, raw: Mapping[str, Any]) -> InboundAdapter: ...

@@ -31,16 +31,25 @@ class PlannerActionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["ENQUEUE", "NOOP", "COMPLETE"]
-    tasks: list[TaskInputModel] = Field(default_factory=list)
+    task_ids: list[str] = Field(default_factory=list)
     final_artifact_id: str | None = None
 
     @model_validator(mode="after")
     def validate_shape(self) -> "PlannerActionModel":
-        if self.action == "ENQUEUE" and not self.tasks:
-            raise ValueError("ENQUEUE requires non-empty tasks")
+        if self.action == "ENQUEUE" and not self.task_ids:
+            raise ValueError("ENQUEUE requires non-empty task_ids")
+        if self.action != "ENQUEUE" and self.task_ids:
+            raise ValueError("task_ids only allowed for ENQUEUE")
         if self.action == "COMPLETE" and not self.final_artifact_id:
             raise ValueError("COMPLETE requires final_artifact_id")
         return self
+
+
+class SchedulerDecisionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_ids: list[str] = Field(default_factory=list)
+    state: Any = None
 
 
 class InboundEventModel(BaseModel):
@@ -57,7 +66,7 @@ class TaskRecordModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
-    attempts: int = Field(ge=0)
+    attempts: int = Field(default=0, ge=0)
     error: str | None = None
     artifact_id: str | None = None
 
@@ -77,6 +86,7 @@ class EventRecordModel(BaseModel):
     event_type: str
     payload: dict[str, Any]
     timestamp: str
+    tick: int | None = Field(default=None, ge=0)
 
 
 class CheckpointModel(BaseModel):
@@ -85,9 +95,25 @@ class CheckpointModel(BaseModel):
     version: int = Field(default=1)
     run_id: str
     workflow_id: str
+
+    planner_id: str
+    planner_config: dict[str, Any] = Field(default_factory=dict)
+    scheduler_id: str
+    scheduler_config: dict[str, Any] = Field(default_factory=dict)
+    scheduler_state: Any = Field(default_factory=dict)
+    sandbox_id: str
+    sandbox_config: dict[str, Any] = Field(default_factory=dict)
+    hitl_id: str | None = None
+    hitl_config: dict[str, Any] | None = None
+
     max_concurrency: int = Field(default=4, ge=1)
+    durability_mode: Literal["sync", "async", "exit"] = "sync"
+    tick: int = Field(default=0, ge=0)
     final_artifact_id: str | None = None
     cancelled: bool = False
+    paused: bool = False
+    pending_approval: dict[str, Any] | None = None
+
     working: dict[str, Any] = Field(default_factory=dict)
     episodic: list[EventRecordModel] = Field(default_factory=list)
     artifacts: dict[str, ArtifactModel] = Field(default_factory=dict)

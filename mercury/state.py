@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -47,9 +49,13 @@ def add_event(
     payload: dict,
     *,
     timestamp: str | None = None,
+    tick: int | None = None,
 ) -> EventRecord:
     record = EventRecord(
-        event_type=event_type, payload=dict(payload), timestamp=timestamp or utc_now()
+        event_type=event_type,
+        payload=dict(payload),
+        timestamp=timestamp or utc_now(),
+        tick=tick,
     )
     memory.episodic.append(record)
     return record
@@ -77,7 +83,7 @@ def add_artifact(
 def ensure_workspace(root: str | Path) -> WorkspacePaths:
     base = Path(root).expanduser().resolve() / ".mercury"
     base.mkdir(parents=True, exist_ok=True)
-    folders = {}
+    folders: dict[str, Path] = {}
     for name in WORKSPACE_DIRS:
         path = base / name
         path.mkdir(parents=True, exist_ok=True)
@@ -97,26 +103,55 @@ def checkpoint_to_model(
     *,
     run_id: str,
     workflow_id: str,
+    planner_id: str,
+    planner_config: dict[str, Any],
+    scheduler_id: str,
+    scheduler_config: dict[str, Any],
+    scheduler_state: Any,
+    sandbox_id: str,
+    sandbox_config: dict[str, Any],
+    hitl_id: str | None,
+    hitl_config: dict[str, Any] | None,
+    max_concurrency: int,
+    durability_mode: str,
+    tick: int,
+    final_artifact_id: str | None,
+    cancelled: bool,
+    paused: bool,
+    pending_approval: dict[str, Any] | None,
     working: dict,
     episodic: list[EventRecord],
     artifacts: dict[str, ArtifactRecord],
     task_specs: list,
     task_records: dict,
-    max_concurrency: int = 4,
-    final_artifact_id: str | None = None,
-    cancelled: bool = False,
 ) -> CheckpointModel:
     return CheckpointModel(
         version=1,
         run_id=run_id,
         workflow_id=workflow_id,
+        planner_id=planner_id,
+        planner_config=dict(planner_config),
+        scheduler_id=scheduler_id,
+        scheduler_config=dict(scheduler_config),
+        scheduler_state=scheduler_state,
+        sandbox_id=sandbox_id,
+        sandbox_config=dict(sandbox_config),
+        hitl_id=hitl_id,
+        hitl_config=dict(hitl_config) if hitl_config is not None else None,
         max_concurrency=max_concurrency,
+        durability_mode=durability_mode,
+        tick=tick,
         final_artifact_id=final_artifact_id,
         cancelled=cancelled,
+        paused=paused,
+        pending_approval=dict(pending_approval) if pending_approval else None,
         working=dict(working),
         episodic=[
             EventRecordModel(
-                event_type=e.event_type, payload=e.payload, timestamp=e.timestamp
+                event_type=e.event_type,
+                payload=e.payload,
+                timestamp=e.timestamp,
+                tick=e.tick,
             )
             for e in episodic
         ],
@@ -142,6 +177,7 @@ def memory_from_checkpoint(checkpoint: CheckpointModel) -> MemoryContext:
                 event_type=event.event_type,
                 payload=dict(event.payload),
                 timestamp=event.timestamp,
+                tick=event.tick,
             )
             for event in checkpoint.episodic
         ],
@@ -162,6 +198,32 @@ def save_checkpoint(checkpoint: CheckpointModel, path: str | Path) -> Path:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text(checkpoint.model_dump_json(indent=2), encoding="utf-8")
     return checkpoint_path
+
+
+def append_event_journal(
+    path: str | Path,
+    *,
+    run_id: str,
+    workflow_id: str,
+    tick: int | None,
+    event: EventRecord,
+) -> Path:
+    event_path = Path(path)
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_tick = tick if tick is not None else event.tick
+    if event_tick is None:
+        event_tick = 0
+    payload = {
+        "run_id": run_id,
+        "workflow_id": workflow_id,
+        "tick": event_tick,
+        "event_type": event.event_type,
+        "payload": event.payload,
+        "timestamp": event.timestamp,
+    }
+    with event_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    return event_path
 
 
 def load_checkpoint(path: str | Path, *, expected_version: int = 1) -> CheckpointModel:
