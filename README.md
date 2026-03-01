@@ -286,6 +286,287 @@ From `mercury`:
 
 ### 1) Install
 
+## Why Mercury Exists
+
+Most orchestration stacks force behavior and correctness into the same layer.
+Mercury splits them:
+
+- Kernel: correctness and invariants.
+- Adapters: behavior and policy.
+
+This gives you:
+
+- Deterministic execution semantics.
+- Swappable strategy per run.
+- A stable runtime core while your agent ecosystem evolves.
+- Dynamic policy selection at runtime without changing kernel code.
+
+## Design Decisions (and Why)
+
+### 1) Kernel-first, adapter-driven
+
+Decision:
+- Keep planner, scheduler, sandbox, HITL, and inbound integration as adapters resolved by ID.
+
+Why:
+- No privileged planner path.
+- Runtime behavior is replaceable without kernel edits.
+- Easier long-term support for heterogeneous agent/tool ecosystems.
+
+Tradeoff:
+- More explicit registration/config upfront.
+
+### 2) Parse once at boundaries, typed domain inside
+
+Decision:
+- Use Pydantic only at boundaries (`workflow`, planner/scheduler actions, inbound events, checkpoints).
+- Convert once to internal domain types (dataclasses/enums) and operate on those.
+
+Why:
+- Strong input discipline and deterministic parse errors.
+- Avoid repeated re-validation inside hot runtime paths.
+- Keeps kernel logic explicit and easier to reason about.
+
+Tradeoff:
+- You maintain conversion code between schema and domain.
+
+### 3) DAG model
+
+Decision:
+- Keep a static DAG for the run; compute ready-set from dependency status.
+
+Why:
+- Clear scheduling semantics.
+- Deterministic resume.
+- Minimal core complexity.
+
+Tradeoff:
+- No dynamic DAG mutation in v2.
+
+### 4) Scheduler as a true seam
+
+Decision:
+- Scheduler only selects from ready task IDs.
+- Scheduler state is persisted in checkpoints and restored on resume.
+
+Why:
+- Swappable scheduling policy without changing task semantics.
+- Deterministic continuation after interruption.
+
+Tradeoff:
+- Scheduler cannot bypass dependency/readiness rules.
+
+### 5) Explicit durability policy
+
+Decision:
+- Per-run durability mode: `sync`, `async`, `exit`.
+
+Why:
+- Operators choose consistency vs throughput explicitly.
+- Same kernel behavior across local development and production.
+
+Tradeoff:
+- `async` and `exit` accept larger loss windows between durable writes.
+
+### 6) Hooks are observability-only
+
+Decision:
+- Lifecycle hooks are read-only.
+
+Why:
+- Observability should not mutate core behavior.
+- Behavior changes belong to adapters with explicit contracts.
+
+Tradeoff:
+- Less flexibility in hooks, but fewer hidden side effects.
+
+## Core Features
+
+- Async DAG runtime with dependency-aware scheduling.
+- Handler primitives under one contract:
+  - Agents
+  - Tools
+  - Skills
+- Adapter seams:
+  - Planner
+  - Scheduler
+  - Sandbox
+  - HITL
+  - Inbound adapter
+- Dedicated sandbox support with swappable execution backends (`host`, `docker`, or custom).
+- Programmatic tool calling as a first-class runtime primitive through typed tool handlers.
+- Strict planner action contract:
+  - `ENQUEUE(task_ids)`
+  - `NOOP`
+  - `COMPLETE(final_artifact_id)`
+- Retry with exponential backoff and optional fallback output.
+- Failure propagation (`failed` -> dependent `blocked`).
+- Lifecycle states:
+  - `pending`
+  - `running`
+  - `succeeded`
+  - `failed`
+  - `cancelled`
+  - `blocked`
+  - `paused`
+- Checkpoint/resume with scheduler-state restoration.
+- Append-only JSONL event journal per run.
+- Read-only lifecycle hooks.
+- Built-in adapters:
+  - planners: `rules`, `rules_pydanticai`
+  - schedulers: `superstep`, `ready_queue`
+  - sandboxes: `host`, `docker`
+  - hitl: `none`, `cli_gate`
+
+## Dynamic Runtime Nucleus
+
+Mercury keeps kernel invariants fixed, but makes runtime behavior configurable at execution time.
+
+Per-run dynamic knobs:
+
+- `planner_id` + `planner_config`
+- `scheduler_id` + `scheduler_config`
+- `sandbox_id` + `sandbox_config`
+- `hitl_id` + `hitl_config`
+- `inbound_adapter_id` + `inbound_adapter_config`
+- `max_concurrency`
+- `durability_mode` (`sync` / `async` / `exit`)
+
+This means you can run the same workflow with different execution policies by changing only config, not kernel logic.
+Unknown plugin IDs fail fast before execution starts.
+
+## How Mercury Is Structured
+
+### Kernel owns correctness
+
+Kernel responsibilities:
+
+- Parse/validate boundaries.
+- Maintain run-state and lifecycle transitions.
+- Enforce planner/scheduler/sandbox/HITL contracts.
+- Apply retries, fallback, blocking, cancellation.
+- Persist checkpoints and event journal.
+- Resume deterministically.
+
+### Ecosystem owns behavior
+
+Adapter and handler responsibilities:
+
+- Planner decides what to enqueue and when to complete.
+- Scheduler chooses among ready tasks.
+- Sandbox decides execution environment.
+- HITL decides pause gates.
+- Inbound adapters map external inputs into canonical events.
+- Handlers (agents/tools/skills) implement business behavior.
+
+## Mercury Diagrams
+
+### 1) Kernel + Ecosystem Topology
+
+```mermaid
+flowchart LR
+    U[CLI / App / SDK] --> K
+
+    subgraph K[Mercury Kernel]
+      P[Parse Boundary]
+      L[Runtime Loop]
+      S[State Machine]
+      C[Checkpoint / Resume]
+      J[Event Journal + Hooks]
+      P --> L --> S --> C
+      L --> J
+    end
+
+    subgraph E[Injectables: BYO or Built-in]
+      H[Handlers: Agents / Tools / Skills]
+      A1[Planner Adapter]
+      A2[Scheduler Adapter]
+      A3[Sandbox Adapter]
+      A4[HITL Adapter]
+      A5[Inbound Adapter]
+    end
+
+    L --> H
+    L <--> A1
+    L <--> A2
+    L <--> A3
+    L <--> A4
+    L <--> A5
+
+    subgraph W[Workspace: .mercury/]
+      W1[checkpoints]
+      W2[events]
+      W3[artifacts]
+      W4[context]
+      W5[traces]
+      W6[skills]
+    end
+
+    C --> W1
+    J --> W2
+    L --> W3
+    L --> W4
+    L --> W5
+    L --> W6
+```
+
+### 2) Runtime Tick Lifecycle
+
+```mermaid
+flowchart TD
+    A[Parse workflow + run config] --> B[Resolve adapters from registries]
+    B --> C[Initialize run-state + first checkpoint]
+    C --> D[Tick loop]
+    D --> E[Call planner adapter]
+    E --> F[Validate planner action]
+    F --> G[Compute ready task IDs]
+    G --> H[Call scheduler adapter]
+    H --> I[Execute selected tasks via sandbox]
+    I --> J[Apply transitions, retries, blocking, artifacts, memory]
+    J --> K[Emit events and optional HITL gate]
+    K --> L[Persist checkpoint per durability mode]
+    L --> M{Complete / Pause / Cancel?}
+    M -- no --> D
+    M -- yes --> N[Finalize and return RunResult]
+```
+
+### 3) Planner/Scheduler Contract Boundary
+
+```mermaid
+flowchart LR
+    K[Kernel]
+    P[Planner Adapter]
+    S[Scheduler Adapter]
+
+    K -->|state_view| P
+    P -->|PlannerAction| K
+    K -->|ready_task_ids + state_view + scheduler_state| S
+    S -->|SchedulerDecision: task_ids subset of ready| K
+```
+
+## Public API
+
+From `mercury`:
+
+- `run_flow(...) -> RunResult`
+- `resume_flow(...) -> RunResult`
+- `inspect_run(checkpoint_path) -> dict`
+- `cancel_run(run_id) -> None`
+- Registrations:
+  - `register_agent`
+  - `register_tool`
+  - `register_skill`
+  - `register_planner`
+  - `register_scheduler`
+  - `register_sandbox`
+  - `register_hitl`
+  - `register_inbound_adapter`
+  - `register_hook`
+
+## Quick Start
+
+### 1) Install
+
 ```bash
 uv venv --python 3.12
 uv sync --extra dev
