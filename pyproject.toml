@@ -1,9 +1,9 @@
 [project]
 name = "mercury"
-version = "0.1.0"
-description = "Minimal multi-agent orchestrator with parse-first boundaries."
+version = "0.2.0"
+description = "Minimal DAG agent runtime with adapter-driven orchestration."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.7.0",
   "pydantic-ai>=0.0.33",
@@ -17,11 +17,14 @@ dev = [
 ]
 
 [project.scripts]
-mercury = "mercury.cli:entrypoint"
+mercury = "mercury_cli.cli:entrypoint"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["mercury", "mercury_cli", "mercury_adapters"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
