@@ -57,7 +57,7 @@ from mercury.types import (
 def _snapshot_value(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(k): _snapshot_value(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_snapshot_value(v) for v in value]
@@ -550,6 +550,7 @@ class Orchestrator:
             output = res.get("output", res)
             if not isinstance(output, dict):
                 raise ParseError("task output must be a dictionary")
+            output = _snapshot_value(output)
 
             artifact = add_artifact(memory, task_id, output)
             memory.working[task_id] = output
@@ -577,7 +578,7 @@ class Orchestrator:
                     plugins=plugins,
                 )
             elif spec.fallback_output is not None:
-                fallback_output = copy.deepcopy(spec.fallback_output)
+                fallback_output = _snapshot_value(copy.deepcopy(spec.fallback_output))
                 artifact = add_artifact(memory, task_id, fallback_output)
                 memory.working[task_id] = fallback_output
                 record.status = TaskStatus.SUCCEEDED
