@@ -182,6 +182,19 @@ Built-in adapters today:
 
 These are runtime controls, not the beginner mental model.
 
+## Technical Deep Dive
+
+If you want to understand the kernel contracts, diagrams, and execution lifecycle in detail, see:
+
+- [Architecture](docs/architecture.md)
+- [Runtime Model](docs/runtime-model.md)
+- [Contracts](docs/contracts.md)
+- [Memory and Workspace](docs/memory-and-workspace.md)
+- [Cookbook](docs/cookbook.md)
+- [Future Work](docs/future-work.md)
+
+[Link health] Run `markdown-link-check README.md docs/*.md` before publishing to cover the new pages.
+
 ## Public API
 
 From `mercury`:
